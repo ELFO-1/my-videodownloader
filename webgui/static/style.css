@@ -1,0 +1,89 @@
+:root{
+  --bg:#0f1320; --panel:#171c2e; --panel2:#1f2740; --line:#2a3252;
+  --txt:#e6e9f5; --muted:#8c94b3; --accent:#5b8cff; --accent2:#3a66d6;
+  --ok:#39d98a; --err:#ff6b6b; --warn:#ffb454; --skip:#8c94b3;
+}
+*{box-sizing:border-box}
+body{
+  margin:0; background:var(--bg); color:var(--txt);
+  font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;
+  padding-bottom:env(safe-area-inset-bottom);
+}
+header{
+  display:flex; align-items:baseline; gap:.6rem; flex-wrap:wrap;
+  padding:1rem 1.1rem .6rem;
+}
+header h1{margin:0; font-size:1.3rem}
+header .sub{color:var(--muted); font-size:.85rem}
+
+.tabs{display:flex; gap:.4rem; padding:0 1.1rem; border-bottom:1px solid var(--line)}
+.tab{
+  background:none; border:none; color:var(--muted); font-size:.95rem;
+  padding:.6rem .4rem; cursor:pointer; border-bottom:2px solid transparent;
+}
+.tab.active{color:var(--txt); border-bottom-color:var(--accent)}
+
+main{max-width:760px; margin:0 auto; padding:1rem 1.1rem 3rem}
+.panel{display:none}
+.panel.active{display:block}
+
+.fld{display:flex; flex-direction:column; gap:.3rem; margin:.6rem 0; flex:1 1 0}
+.fld>span{font-size:.85rem; color:var(--muted)}
+.fld small{color:var(--muted)}
+textarea,select,input[type=search]{
+  width:100%; background:var(--panel); color:var(--txt);
+  border:1px solid var(--line); border-radius:9px; padding:.6rem .7rem;
+  font-size:1rem; font-family:inherit;
+}
+textarea{resize:vertical}
+.row{display:flex; gap:.7rem; flex-wrap:wrap}
+.row.between{justify-content:space-between; align-items:center}
+.checks{display:flex; gap:1rem; flex-wrap:wrap; margin:.6rem 0}
+.checks label{display:flex; align-items:center; gap:.35rem; font-size:.9rem; color:var(--txt)}
+
+button.primary{
+  background:var(--accent); color:#fff; border:none; border-radius:9px;
+  padding:.7rem 1.1rem; font-size:1rem; cursor:pointer; margin-top:.4rem;
+}
+button.primary:hover{background:var(--accent2)}
+button.primary:disabled{opacity:.5; cursor:default}
+button.ghost{
+  background:none; border:1px solid var(--line); color:var(--muted);
+  border-radius:8px; padding:.45rem .8rem; cursor:pointer;
+}
+button.ghost.small{font-size:.8rem; padding:.3rem .6rem}
+
+.msg{font-size:.85rem; color:var(--muted); min-height:1.1em; margin:.5rem 0 0}
+.muted{color:var(--muted); font-size:.85rem}
+.hidden{display:none !important}
+
+.login-box{background:var(--panel); border:1px solid var(--line); border-radius:10px; padding:.8rem 1rem; margin-top:.8rem}
+.login-box code{background:var(--panel2); padding:.15rem .5rem; border-radius:6px; font-size:1.2rem; letter-spacing:.1em; color:var(--accent)}
+.login-box a{color:var(--accent)}
+
+.rec-list{margin:.6rem 0; max-height:48vh; overflow:auto; border:1px solid var(--line); border-radius:10px}
+.rec{display:flex; align-items:flex-start; gap:.6rem; padding:.55rem .7rem; border-bottom:1px solid var(--line); cursor:pointer}
+.rec:last-child{border-bottom:none}
+.rec:hover{background:var(--panel)}
+.rec input{margin-top:.25rem}
+.rec .meta{display:flex; flex-direction:column; gap:.15rem}
+.rec .t{font-size:.95rem}
+.rec .s{font-size:.78rem; color:var(--muted)}
+
+.jobs{margin-top:1.4rem}
+.jobs h2{font-size:1.05rem; margin:.2rem 0}
+.job{background:var(--panel); border:1px solid var(--line); border-radius:10px; padding:.6rem .8rem; margin:.5rem 0}
+.job .head{display:flex; justify-content:space-between; gap:.6rem; align-items:center}
+.job .title{font-size:.92rem; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; flex:1}
+.job .badge{font-size:.72rem; padding:.15rem .5rem; border-radius:20px; white-space:nowrap}
+.badge.running{background:rgba(91,140,255,.18); color:var(--accent)}
+.badge.queued{background:var(--panel2); color:var(--muted)}
+.badge.done{background:rgba(57,217,138,.16); color:var(--ok)}
+.badge.error{background:rgba(255,107,107,.16); color:var(--err)}
+.badge.skipped{background:var(--panel2); color:var(--skip)}
+.badge.canceled{background:var(--panel2); color:var(--muted)}
+.bar{height:7px; background:var(--panel2); border-radius:6px; overflow:hidden; margin:.5rem 0 .3rem}
+.bar > i{display:block; height:100%; background:var(--accent); width:0; transition:width .4s}
+.job .sub{display:flex; justify-content:space-between; gap:.6rem; font-size:.76rem; color:var(--muted)}
+.job .x{background:none; border:none; color:var(--muted); cursor:pointer; font-size:1rem}
+.empty{color:var(--muted); font-size:.88rem; padding:.6rem 0}

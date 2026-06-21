@@ -1,0 +1,94 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#0f1320">
+<title>Video Downloader</title>
+<link rel="stylesheet" href="style.css?v=1">
+</head>
+<body>
+<header>
+  <h1>🎬 Video Downloader</h1>
+  <span class="sub">yt-dlp + waipu.tv</span>
+</header>
+
+<nav class="tabs">
+  <button class="tab active" data-tab="download">⬇️ Download</button>
+  <button class="tab" data-tab="waipu">📺 waipu Aufnahmen</button>
+</nav>
+
+<main>
+  <!-- ===== Download-Tab ===== -->
+  <section id="tab-download" class="panel active">
+    <label class="fld">
+      <span>Video-URL(s) <small>(eine pro Zeile)</small></span>
+      <textarea id="url" rows="2" placeholder="https://www.youtube.com/watch?v=..."></textarea>
+    </label>
+    <div class="row">
+      <label class="fld">
+        <span>Qualität</span>
+        <select id="quality"></select>
+      </label>
+      <label class="fld">
+        <span>Ziel-Ordner</span>
+        <select id="dest"></select>
+      </label>
+    </div>
+    <div class="checks">
+      <label><input type="checkbox" id="audio_only"> 🎵 Nur Audio (MP3)</label>
+      <label><input type="checkbox" id="playlist"> 📃 Ganze Playlist</label>
+      <label><input type="checkbox" id="subtitles"> 💬 Untertitel (de)</label>
+    </div>
+    <button id="btn-download" class="primary">Download starten</button>
+    <p id="dl-msg" class="msg"></p>
+  </section>
+
+  <!-- ===== waipu-Tab ===== -->
+  <section id="tab-waipu" class="panel">
+    <div id="waipu-loggedout" class="hidden">
+      <p>Du bist noch nicht bei waipu.tv angemeldet.</p>
+      <button id="btn-waipu-login" class="primary">waipu Login (Browser)</button>
+      <div id="waipu-login-box" class="login-box hidden">
+        <p>1. Öffne im Browser: <a id="wl-url" href="#" target="_blank" rel="noopener"></a></p>
+        <p>2. Gib diesen Code ein: <code id="wl-code"></code></p>
+        <p class="muted">Dort kannst du dich auch per Amazon-Button anmelden.</p>
+        <p id="wl-status" class="msg"></p>
+      </div>
+    </div>
+
+    <div id="waipu-loggedin" class="hidden">
+      <div class="row between">
+        <button id="btn-waipu-load" class="primary">Aufnahmen laden</button>
+        <button id="btn-waipu-logout" class="ghost">Abmelden</button>
+      </div>
+      <div class="row">
+        <label class="fld">
+          <span>Qualität</span>
+          <select id="waipu-quality"></select>
+        </label>
+        <label class="fld">
+          <span>Ziel-Ordner</span>
+          <select id="waipu-dest"></select>
+        </label>
+      </div>
+      <input type="search" id="waipu-filter" placeholder="🔍 Aufnahmen filtern ...">
+      <div id="waipu-list" class="rec-list"></div>
+      <button id="btn-waipu-dl" class="primary hidden">Ausgewählte herunterladen</button>
+      <p id="waipu-msg" class="msg"></p>
+    </div>
+  </section>
+
+  <!-- ===== Jobs ===== -->
+  <section class="jobs">
+    <div class="row between">
+      <h2>Downloads</h2>
+      <button id="btn-clear" class="ghost small">Fertige aufräumen</button>
+    </div>
+    <div id="jobs"></div>
+  </section>
+</main>
+
+<script src="app.js?v=1"></script>
+</body>
+</html>

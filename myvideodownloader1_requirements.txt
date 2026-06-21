@@ -1,0 +1,4 @@
+yt-dlp>=2023.12.30
+configparser>=5.3.0
+pathlib>=1.0.1
+requests>=2.28.0
