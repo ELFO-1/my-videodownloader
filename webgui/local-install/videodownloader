@@ -1,0 +1,18 @@
+#!/usr/bin/env bash
+# Startet (falls noetig) den lokalen Video-Downloader-Dienst und oeffnet die GUI.
+PORT=8088
+URL="http://localhost:$PORT"
+
+# Dienst starten (no-op falls schon laeuft)
+systemctl --user start videodownloader.service 2>/dev/null
+
+# warten bis der Server antwortet (max ~5s)
+for _ in $(seq 1 25); do
+    curl -sf -o /dev/null "$URL/" && break
+    sleep 0.2
+done
+
+echo "Video Downloader: $URL"
+if command -v xdg-open >/dev/null; then
+    xdg-open "$URL" >/dev/null 2>&1 &
+fi
