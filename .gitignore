@@ -9,3 +9,6 @@ __pycache__/
 # evtl. lokale Artefakte
 *.tmp
 *.bak
+
+# yt-dlp Cookies (Session-Daten, nie committen)
+cookies.txt

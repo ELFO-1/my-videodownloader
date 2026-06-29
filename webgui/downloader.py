@@ -219,6 +219,11 @@ class JobManager:
         out_dir = self._dest_path(dest)
         cmd = ["yt-dlp", "--newline", "--no-warnings", "--ignore-config",
                "--no-overwrites", "-P", out_dir]
+        # Cookies optional: nur anhaengen, wenn die Datei vorhanden ist.
+        # Austauschen: /DATA/AppData/videodownloader/data/cookies.txt (Host) ueberschreiben.
+        cookies = "/data/cookies.txt"
+        if os.path.isfile(cookies):
+            cmd += ["--cookies", cookies]
         if audio_only:
             cmd += ["-x", "--audio-format", "mp3", "--audio-quality", "0",
                     "-o", "%(title)s.%(ext)s"]
