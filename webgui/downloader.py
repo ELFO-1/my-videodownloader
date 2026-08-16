@@ -17,6 +17,7 @@ import re
 import shlex
 import shutil
 import subprocess
+import tempfile
 import sys
 import threading
 import time
@@ -426,16 +427,40 @@ class JobManager:
         path = os.path.join(self.data_dir, "cookies.txt")
         return path if os.path.isfile(path) else ""
 
-    def _cookies_args(self, use_cookies):
-        """--cookies nur auf ausdruecklichen Wunsch.
+    def _cookie_copy(self, use_cookies):
+        """Wegwerf-Kopie der cookies.txt fuer genau einen yt-dlp-Lauf.
 
-        Eine unvollstaendige oder abgelaufene YouTube-Session laesst YouTube
-        die Medien-URLs mit HTTP 403 abweisen - dieselben Videos laden ohne
-        Cookies problemlos. Deshalb ist das eine bewusste Entscheidung pro
-        Download statt "Datei da, also immer benutzen".
+        yt-dlp schreibt die Cookie-Datei nach jedem Lauf zurueck. YouTube
+        beantwortet Anfragen dabei regelmaessig mit einem Logout - danach
+        fehlen SID, SAPISID, __Secure-1PSID & Co. in der Datei und jeder
+        weitere Download scheitert mit HTTP 403. yt-dlp bekommt deshalb nur
+        eine Kopie zu sehen; das Original bleibt unangetastet.
+
+        Ausserdem ist --cookies eine bewusste Entscheidung pro Download:
+        eine kaputte Session laesst Videos scheitern, die ohne Cookies
+        problemlos laden.
         """
-        path = self.cookies_path() if use_cookies else ""
-        return ["--cookies", path] if path else []
+        src = self.cookies_path() if use_cookies else ""
+        if not src:
+            return ""
+        fd, tmp = tempfile.mkstemp(prefix=".cookies-", suffix=".txt",
+                                   dir=self.data_dir or None)
+        os.close(fd)
+        try:
+            shutil.copyfile(src, tmp)
+            os.chmod(tmp, 0o600)
+        except OSError:
+            self._drop_cookie_copy(tmp)
+            return ""
+        return tmp
+
+    @staticmethod
+    def _drop_cookie_copy(path):
+        if path:
+            try:
+                os.remove(path)
+            except OSError:
+                pass
 
     def _archive_args(self, dest):
         """Fuehrt pro Zielordner eine Liste bereits geladener Videos."""
@@ -550,7 +575,9 @@ class JobManager:
         job.out_dir = out_dir
         cmd = [YTDLP_BIN] + self._base_args() + ["-P", out_dir]
         # Cookies optional: nur anhaengen, wenn DATA_DIR/cookies.txt vorhanden ist.
-        cmd += self._cookies_args(use_cookies)
+        cookie_file = self._cookie_copy(use_cookies)
+        if cookie_file:
+            cmd += ["--cookies", cookie_file]
         if audio_only:
             cmd += ["-x", "--audio-format", "mp3", "--audio-quality", "0",
                     "-o", "%(title)s.%(ext)s"]
@@ -575,7 +602,10 @@ class JobManager:
         # "--" trennt Optionen von der URL: sonst wuerde yt-dlp eine mit "-"
         # beginnende Eingabe als Option interpretieren (z. B. --exec).
         cmd += ["--", url]
-        rc = self._run_proc(job, cmd)
+        try:
+            rc = self._run_proc(job, cmd)
+        finally:
+            self._drop_cookie_copy(cookie_file)
         if job._cancel:
             job.status = "canceled"
             job.message = "Abgebrochen."
