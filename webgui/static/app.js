@@ -49,6 +49,8 @@ async function loadConfig() {
   if (c.dest_folders.includes("downloads")) $("#dest").value = "downloads";
   if (c.dest_folders.includes("Aufnahmen")) $("#waipu-dest").value = "Aufnahmen";
   if (!c.waipu_available) $('.tab[data-tab="waipu"]').style.display = "none";
+  // Cookie-Option nur zeigen, wenn ueberhaupt eine cookies.txt hinterlegt ist
+  $("#lbl-cookies").classList.toggle("hidden", !c.cookies_available);
   setYtdlpVersion(c.ytdlp_version);
   // Bei einem Distributions-Paket gibt es keinen sicheren Update-Weg aus der GUI.
   if (!c.ytdlp_updatable) {
@@ -95,6 +97,7 @@ $("#btn-download").addEventListener("click", async () => {
       playlist: $("#playlist").checked,
       subtitles: $("#subtitles").checked,
       archive: $("#archive").checked,
+      cookies: $("#cookies").checked,
     });
     setMsg("#dl-msg", `${r.ids.length} Download(s) gestartet.`);
     $("#url").value = "";

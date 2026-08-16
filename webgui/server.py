@@ -172,6 +172,7 @@ class Handler(BaseHTTPRequestHandler):
                 "waipu_available": WAIPU is not None,
                 "ytdlp_version": downloader.ytdlp_version(),
                 "ytdlp_updatable": bool(downloader.ytdlp_update_cmd()),
+                "cookies_available": bool(JOBS.cookies_path()),
             })
         if path == "/api/jobs":
             return self._json({"jobs": JOBS.list_jobs()})
@@ -228,13 +229,15 @@ class Handler(BaseHTTPRequestHandler):
         playlist = bool(body.get("playlist"))
         subtitles = bool(body.get("subtitles"))
         archive = bool(body.get("archive"))
+        cookies = bool(body.get("cookies"))
 
         urls = [u.strip() for u in raw.splitlines() if u.strip()]
         bad = [u for u in urls if not valid_url(u)]
         if bad:
             return self._json(
                 {"error": f"Ungueltige URL (nur http/https): {bad[0][:80]}"}, 400)
-        ids = [JOBS.add_url(u, quality, audio_only, dest, playlist, subtitles, archive)
+        ids = [JOBS.add_url(u, quality, audio_only, dest, playlist, subtitles,
+                            archive, cookies)
                for u in urls]
         return self._json({"ids": ids})
 

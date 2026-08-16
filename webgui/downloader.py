@@ -42,6 +42,39 @@ _PLAYLIST_N = re.compile(r"Playlist .*?: Downloading (\d+) items")
 FINAL_STATES = ("done", "error", "skipped", "canceled")
 
 YTDLP_BIN = os.environ.get("YTDLP_BIN", "yt-dlp")
+# Challenge-Solver-Skripte, die yt-dlp bei Bedarf nachlaedt. YouTube verlangt
+# das Loesen einer JS-Challenge; ohne Solver (und ohne JS-Laufzeit wie Deno)
+# bleiben nur Formate uebrig, deren URLs mit HTTP 403 abgewiesen werden.
+# Auf "" setzen, um das Nachladen zu unterbinden.
+YTDLP_REMOTE_COMPONENTS = os.environ.get("YTDLP_REMOTE_COMPONENTS", "ejs:github")
+# YouTube drosselt schnelle Serien von Anfragen: das erste Video laedt, danach
+# kommt fuer den Rest HTTP 403. Eine kurze zufaellige Pause zwischen den Videos
+# einer Playlist vermeidet das weitgehend. 0 schaltet die Pausen ab.
+def _float_env(name, default):
+    try:
+        return max(0.0, float(os.environ.get(name, default)))
+    except ValueError:
+        return default
+
+
+SLEEP_REQUESTS = _float_env("YTDLP_SLEEP_REQUESTS", 1.0)
+SLEEP_INTERVAL = _float_env("YTDLP_SLEEP_INTERVAL", 5.0)
+MAX_SLEEP_INTERVAL = _float_env("YTDLP_MAX_SLEEP_INTERVAL", 30.0)
+
+_remote_components_ok = None
+
+
+def supports_remote_components():
+    """Prueft einmalig, ob das installierte yt-dlp --remote-components kennt."""
+    global _remote_components_ok
+    if _remote_components_ok is None:
+        try:
+            out = subprocess.run([YTDLP_BIN, "--help"], capture_output=True,
+                                 text=True, timeout=30)
+            _remote_components_ok = "--remote-components" in out.stdout
+        except (OSError, subprocess.SubprocessError):
+            _remote_components_ok = False
+    return _remote_components_ok
 
 
 def ytdlp_update_cmd():
@@ -69,7 +102,7 @@ def shorten_error(line):
     das verdoppelt den Text ohne Mehrwert.
     """
     text = line.strip()
-    text = re.sub(r"^ERROR:\s*", "", text)
+    text = re.sub(r"^(?:ERROR|WARNING):\s*", "", text)
     text = re.sub(r"^\[[^\]]+\]\s*", "", text)      # Extractor-Praefix
     text = text.split(" (caused by")[0]
     return text[:200].strip()
@@ -137,6 +170,7 @@ class Job:
         self.failed = 0           # uebersprungene/fehlgeschlagene Videos (Playlist)
         self.total = 0            # Gesamtzahl Videos laut Playlist
         self.last_error = ""      # letzte ERROR-Zeile von yt-dlp
+        self.last_warning = ""    # letzte WARNING-Zeile (hilft bei der Ursache)
         self.created = time.time()
         self.finished = None
         self.out_dir = ""
@@ -248,11 +282,12 @@ class JobManager:
                 self.cancel(job.id)
 
     def add_url(self, url, quality="best", audio_only=False, dest="downloads",
-                playlist=False, subtitles=False, archive=False):
+                playlist=False, subtitles=False, archive=False, cookies=False):
         kind = "playlist" if playlist else "url"
         job = Job(title=url, kind=kind, dest=dest)
         self._register(job, lambda: self._run_url(
-            job, url, quality, audio_only, dest, playlist, subtitles, archive))
+            job, url, quality, audio_only, dest, playlist, subtitles, archive,
+            cookies))
         return job.id
 
     def add_waipu(self, rec, quality="best", dest="Aufnahmen"):
@@ -345,12 +380,44 @@ class JobManager:
         os.makedirs(path, exist_ok=True)
         return path
 
-    def _cookies_args(self):
-        """--cookies nur anhaengen, wenn DATA_DIR/cookies.txt existiert."""
-        if not self.data_dir:
+    def _base_args(self):
+        """Argumente, die jeder yt-dlp-Aufruf bekommt."""
+        args = ["--newline", "--ignore-config", "--no-overwrites"]
+        if self.data_dir:
+            # Der Container-User hat kein beschreibbares HOME - ohne eigenen
+            # Cache laedt yt-dlp das Solver-Skript bei jedem Aufruf neu.
+            args += ["--cache-dir", os.path.join(self.data_dir, "cache")]
+        if YTDLP_REMOTE_COMPONENTS and supports_remote_components():
+            args += ["--remote-components", YTDLP_REMOTE_COMPONENTS]
+        if SLEEP_REQUESTS:
+            args += ["--sleep-requests", str(SLEEP_REQUESTS)]
+        args += ["--extractor-retries", "5"]
+        return args
+
+    def _throttle_args(self):
+        """Zufaellige Pause zwischen den Videos einer Playlist."""
+        if not SLEEP_INTERVAL:
             return []
-        cookies = os.path.join(self.data_dir, "cookies.txt")
-        return ["--cookies", cookies] if os.path.isfile(cookies) else []
+        return ["--sleep-interval", str(SLEEP_INTERVAL),
+                "--max-sleep-interval", str(max(SLEEP_INTERVAL, MAX_SLEEP_INTERVAL))]
+
+    def cookies_path(self):
+        """Pfad der optionalen cookies.txt - oder "" wenn keine hinterlegt ist."""
+        if not self.data_dir:
+            return ""
+        path = os.path.join(self.data_dir, "cookies.txt")
+        return path if os.path.isfile(path) else ""
+
+    def _cookies_args(self, use_cookies):
+        """--cookies nur auf ausdruecklichen Wunsch.
+
+        Eine unvollstaendige oder abgelaufene YouTube-Session laesst YouTube
+        die Medien-URLs mit HTTP 403 abweisen - dieselben Videos laden ohne
+        Cookies problemlos. Deshalb ist das eine bewusste Entscheidung pro
+        Download statt "Datei da, also immer benutzen".
+        """
+        path = self.cookies_path() if use_cookies else ""
+        return ["--cookies", path] if path else []
 
     def _archive_args(self, dest):
         """Fuehrt pro Zielordner eine Liste bereits geladener Videos."""
@@ -444,19 +511,28 @@ class JobManager:
                 if line.startswith("ERROR"):
                     job.failed += 1
                     job.last_error = shorten_error(line)
+                elif line.startswith("WARNING"):
+                    job.last_warning = shorten_error(line)
         finally:
             proc.wait()
             job._proc = None
         return proc.returncode
 
+    def _error_message(self, job, rc, fallback=""):
+        """Fehlertext plus letzte Warnung - die nennt oft die eigentliche Ursache
+        (z. B. fehlende JS-Laufzeit, weswegen YouTube nur 403 liefert)."""
+        text = job.last_error or fallback or f"yt-dlp Fehler (Code {rc})."
+        if job.last_warning and job.last_warning[:40] not in text:
+            text += f" — Hinweis: {job.last_warning}"
+        return text
+
     def _run_url(self, job, url, quality, audio_only, dest, playlist, subtitles,
-                 archive=False):
+                 archive=False, use_cookies=False):
         out_dir = self._dest_path(dest)
         job.out_dir = out_dir
-        cmd = [YTDLP_BIN, "--newline", "--no-warnings", "--ignore-config",
-               "--no-overwrites", "-P", out_dir]
+        cmd = [YTDLP_BIN] + self._base_args() + ["-P", out_dir]
         # Cookies optional: nur anhaengen, wenn DATA_DIR/cookies.txt vorhanden ist.
-        cmd += self._cookies_args()
+        cmd += self._cookies_args(use_cookies)
         if audio_only:
             cmd += ["-x", "--audio-format", "mp3", "--audio-quality", "0",
                     "-o", "%(title)s.%(ext)s"]
@@ -464,8 +540,11 @@ class JobManager:
             cmd += ["-f", quality_format(quality)]
             if playlist:
                 # fehlende/nicht verfuegbare Videos ueberspringen statt abbrechen
-                cmd += ["--ignore-errors",
-                        "-o", "%(playlist_title|)s/%(title)s.%(ext)s"]
+                # "&{}/|" haengt den Ordner nur an, wenn es einen Playlist-Titel
+                # gibt. Sonst entstuende ein fuehrender "/" - ein absoluter Pfad,
+                # bei dem yt-dlp -P ignoriert und ausserhalb des Zielordners landet.
+                cmd += ["--ignore-errors"] + self._throttle_args() + [
+                    "-o", "%(playlist_title&{}/|)s%(title)s.%(ext)s"]
             else:
                 cmd += ["--no-playlist", "-o", "%(title)s.%(ext)s"]
         if archive:
@@ -486,7 +565,7 @@ class JobManager:
             got = (job.total - job.failed) if job.total else None
             if job.failed and got == 0:
                 job.status = "error"
-                job.message = job.last_error or "Alle Videos fehlgeschlagen."
+                job.message = self._error_message(job, rc, "Alle Videos fehlgeschlagen.")
             else:
                 job.status = "done"
                 job.percent = 100.0
@@ -501,7 +580,7 @@ class JobManager:
             job.message = "Fertig."
         else:
             job.status = "error"
-            job.message = job.last_error or f"yt-dlp Fehler (Code {rc})."
+            job.message = self._error_message(job, rc)
 
     def _run_waipu(self, job, rec, quality, dest):
         if self.waipu is None:
@@ -532,10 +611,10 @@ class JobManager:
             self._set_file(job, os.path.join(out_dir, existing[0]))
             return
 
-        cmd = [YTDLP_BIN, "--newline", "--no-warnings", "--ignore-config",
-               "--no-overwrites", "-f", quality_format(quality),
-               "--add-header", f"User-Agent: {WAIPU_USER_AGENT}",
-               "-o", out_template, "--", stream_url]
+        cmd = [YTDLP_BIN] + self._base_args() + [
+            "-f", quality_format(quality),
+            "--add-header", f"User-Agent: {WAIPU_USER_AGENT}",
+            "-o", out_template, "--", stream_url]
         rc = self._run_proc(job, cmd)
         if job._cancel:
             job.status = "canceled"
@@ -547,4 +626,4 @@ class JobManager:
             job.message = "Fertig."
         else:
             job.status = "error"
-            job.message = job.last_error or f"yt-dlp Fehler (Code {rc})."
+            job.message = self._error_message(job, rc)
