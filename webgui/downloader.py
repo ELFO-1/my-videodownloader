@@ -57,6 +57,15 @@ def _float_env(name, default):
         return default
 
 
+# Formatwahl fuer Jellyfin: zuerst die hoechste Aufloesung, und bei gleicher
+# Aufloesung H.264 + AAC bevorzugen - das spielt Jellyfin auf jedem Client
+# direkt ab. Oberhalb 1080p bietet YouTube kein H.264 an, dort greift
+# automatisch VP9/AV1.
+FORMAT_SORT = os.environ.get("YTDLP_FORMAT_SORT",
+                             "res,vcodec:h264,acodec:aac,ext:mp4:m4a")
+# Einheitlicher Container, damit nicht mal .webm und mal .mp4 herauskommt.
+MERGE_FORMAT = os.environ.get("YTDLP_MERGE_FORMAT", "mp4")
+
 SLEEP_REQUESTS = _float_env("YTDLP_SLEEP_REQUESTS", 1.0)
 SLEEP_INTERVAL = _float_env("YTDLP_SLEEP_INTERVAL", 5.0)
 MAX_SLEEP_INTERVAL = _float_env("YTDLP_MAX_SLEEP_INTERVAL", 30.0)
@@ -394,6 +403,15 @@ class JobManager:
         args += ["--extractor-retries", "5"]
         return args
 
+    def _format_args(self):
+        """Sortierung und Zielcontainer (siehe FORMAT_SORT)."""
+        args = []
+        if FORMAT_SORT:
+            args += ["-S", FORMAT_SORT]
+        if MERGE_FORMAT:
+            args += ["--merge-output-format", MERGE_FORMAT]
+        return args
+
     def _throttle_args(self):
         """Zufaellige Pause zwischen den Videos einer Playlist."""
         if not SLEEP_INTERVAL:
@@ -537,7 +555,7 @@ class JobManager:
             cmd += ["-x", "--audio-format", "mp3", "--audio-quality", "0",
                     "-o", "%(title)s.%(ext)s"]
         else:
-            cmd += ["-f", quality_format(quality)]
+            cmd += ["-f", quality_format(quality)] + self._format_args()
             if playlist:
                 # fehlende/nicht verfuegbare Videos ueberspringen statt abbrechen
                 # Der "/" muss AUSSERHALB der Klammer stehen, sonst gilt er als
@@ -614,7 +632,7 @@ class JobManager:
             return
 
         cmd = [YTDLP_BIN] + self._base_args() + [
-            "-f", quality_format(quality),
+            "-f", quality_format(quality)] + self._format_args() + [
             "--add-header", f"User-Agent: {WAIPU_USER_AGENT}",
             "-o", out_template, "--", stream_url]
         rc = self._run_proc(job, cmd)
