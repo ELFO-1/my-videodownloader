@@ -540,11 +540,13 @@ class JobManager:
             cmd += ["-f", quality_format(quality)]
             if playlist:
                 # fehlende/nicht verfuegbare Videos ueberspringen statt abbrechen
-                # "&{}/|" haengt den Ordner nur an, wenn es einen Playlist-Titel
-                # gibt. Sonst entstuende ein fuehrender "/" - ein absoluter Pfad,
-                # bei dem yt-dlp -P ignoriert und ausserhalb des Zielordners landet.
+                # Der "/" muss AUSSERHALB der Klammer stehen, sonst gilt er als
+                # Teil des Feldwerts und yt-dlp ersetzt ihn durch "\u29f8" - dann
+                # entsteht ein flacher Dateiname statt eines Unterordners.
+                # Die Fallback-Kette verhindert einen leeren Wert (fuehrender "/"
+                # waere ein absoluter Pfad, bei dem -P ignoriert wird).
                 cmd += ["--ignore-errors"] + self._throttle_args() + [
-                    "-o", "%(playlist_title&{}/|)s%(title)s.%(ext)s"]
+                    "-o", "%(playlist_title,playlist_id|Playlist)s/%(title)s.%(ext)s"]
             else:
                 cmd += ["--no-playlist", "-o", "%(title)s.%(ext)s"]
         if archive:
