@@ -7,17 +7,23 @@ stellt eine JSON-API fuer Downloads, Job-Status und den waipu-Login bereit.
 
 Aufruf:  python3 server.py [PORT]
 Env:     MEDIA_ROOT (Default /media), DATA_DIR (Default /data),
-         DEST_FOLDERS (kommagetrennt), AUTH_PASSWORD (optional)
+         DEST_FOLDERS (kommagetrennt), WORKERS (Default 2),
+         BIND (Default 0.0.0.0),
+         AUTH_USER (Default admin), AUTH_PASSWORD (setzen = Basic-Auth aktiv)
 """
 
+import base64
+import hmac
 import json
 import os
 import sys
 import threading
+import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from urllib.parse import urlparse, parse_qs
+from urllib.parse import urlparse
 
 import waipu
+import downloader
 from downloader import JobManager
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -28,6 +34,15 @@ DATA_DIR = os.environ.get("DATA_DIR", "/data")
 DEST_FOLDERS = [d.strip() for d in os.environ.get(
     "DEST_FOLDERS", "downloads,filme,serien,musik,Aufnahmen").split(",") if d.strip()]
 QUALITIES = ["best", "1080", "720", "480"]
+BIND = os.environ.get("BIND", "0.0.0.0")
+try:
+    WORKERS = max(1, int(os.environ.get("WORKERS", "2")))
+except ValueError:
+    WORKERS = 2
+
+AUTH_USER = os.environ.get("AUTH_USER", "admin")
+AUTH_PASSWORD = os.environ.get("AUTH_PASSWORD", "")
+ALLOWED_SCHEMES = ("http", "https")
 
 # globale Singletons
 STORE = waipu.Store(os.path.join(DATA_DIR, "waipu.json"))
@@ -35,7 +50,12 @@ try:
     WAIPU = waipu.WaipuClient(STORE)
 except waipu.WaipuError:
     WAIPU = None
-JOBS = JobManager(MEDIA_ROOT, waipu_client=WAIPU)
+JOBS = JobManager(MEDIA_ROOT, waipu_client=WAIPU, workers=WORKERS, data_dir=DATA_DIR)
+
+# zuletzt geladene waipu-Aufnahmen (id -> rec), damit ein Download die vollen
+# Metadaten hat. Wird bei Bedarf automatisch neu geholt.
+_WAIPU_RECS = {}
+_WAIPU_LOCK = threading.Lock()
 
 _CONTENT_TYPES = {
     ".html": "text/html; charset=utf-8",
@@ -47,8 +67,27 @@ _CONTENT_TYPES = {
 }
 
 
+def valid_dest(dest):
+    """Nur konfigurierte Zielordner zulassen (kein Ausbrechen aus MEDIA_ROOT)."""
+    return dest if dest in DEST_FOLDERS else None
+
+
+def valid_url(url):
+    """Akzeptiert nur http(s)-URLs - schuetzt vor file:// & Optionsinjektion."""
+    if url.startswith("-"):
+        return False
+    try:
+        parsed = urlparse(url)
+    except ValueError:
+        return False
+    return parsed.scheme in ALLOWED_SCHEMES and bool(parsed.netloc)
+
+
 class Handler(BaseHTTPRequestHandler):
-    server_version = "VideoDownloader/1.0"
+    server_version = "VideoDownloader/1.1"
+    # Keep-Alive spart bei der Fortschritts-Abfrage jede Menge Verbindungsaufbau.
+    protocol_version = "HTTP/1.1"
+    timeout = 60  # untaetige Verbindungen nicht ewig einen Thread belegen lassen
 
     def log_message(self, fmt, *args):  # ruhiger
         sys.stderr.write("%s - %s\n" % (self.address_string(), fmt % args))
@@ -66,19 +105,48 @@ class Handler(BaseHTTPRequestHandler):
 
     def _read_json(self):
         length = int(self.headers.get("Content-Length", 0) or 0)
-        if not length:
+        if not length or length > 1_000_000:
             return {}
         try:
-            return json.loads(self.rfile.read(length).decode("utf-8"))
+            data = json.loads(self.rfile.read(length).decode("utf-8"))
         except Exception:
             return {}
+        return data if isinstance(data, dict) else {}
+
+    # --- Authentifizierung --------------------------------------------------
+
+    def _authorized(self):
+        """Basic-Auth, sobald AUTH_PASSWORD gesetzt ist."""
+        if not AUTH_PASSWORD:
+            return True
+        header = self.headers.get("Authorization", "")
+        if not header.startswith("Basic "):
+            return False
+        try:
+            raw = base64.b64decode(header[6:].strip()).decode("utf-8")
+            user, _, password = raw.partition(":")
+        except Exception:
+            return False
+        ok_user = hmac.compare_digest(user, AUTH_USER)
+        ok_pass = hmac.compare_digest(password, AUTH_PASSWORD)
+        return ok_user and ok_pass
+
+    def _require_auth(self):
+        time.sleep(0.5)  # bremst Rateversuche
+        body = b"Anmeldung erforderlich."
+        self.send_response(401)
+        self.send_header("WWW-Authenticate", 'Basic realm="Video Downloader"')
+        self.send_header("Content-Type", "text/plain; charset=utf-8")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
 
     def _serve_static(self, path):
         if path in ("/", ""):
             path = "/index.html"
         rel = os.path.normpath(path).lstrip("/")
         full = os.path.join(STATIC, rel)
-        if not full.startswith(STATIC) or not os.path.isfile(full):
+        if not full.startswith(STATIC + os.sep) or not os.path.isfile(full):
             self.send_error(404, "Not found")
             return
         ext = os.path.splitext(full)[1]
@@ -94,13 +162,16 @@ class Handler(BaseHTTPRequestHandler):
     # --- Routing ------------------------------------------------------------
 
     def do_GET(self):
-        parsed = urlparse(self.path)
-        path = parsed.path
+        if not self._authorized():
+            return self._require_auth()
+        path = urlparse(self.path).path
         if path == "/api/config":
             return self._json({
                 "dest_folders": DEST_FOLDERS,
                 "qualities": QUALITIES,
                 "waipu_available": WAIPU is not None,
+                "ytdlp_version": downloader.ytdlp_version(),
+                "ytdlp_updatable": bool(downloader.ytdlp_update_cmd()),
             })
         if path == "/api/jobs":
             return self._json({"jobs": JOBS.list_jobs()})
@@ -118,16 +189,21 @@ class Handler(BaseHTTPRequestHandler):
         return self._serve_static(path)
 
     def do_POST(self):
+        if not self._authorized():
+            return self._require_auth()
         path = urlparse(self.path).path
         body = self._read_json()
         if path == "/api/download":
             return self._add_download(body)
         if path == "/api/jobs/cancel":
-            ok = JOBS.cancel(body.get("id", ""))
+            ok = JOBS.cancel(str(body.get("id", "")))
             return self._json({"ok": ok})
         if path == "/api/jobs/clear":
-            n = JOBS.clear_finished()
-            return self._json({"cleared": n})
+            return self._json({"cleared": JOBS.clear_finished()})
+        if path == "/api/ytdlp/update":
+            ok, message, version = downloader.ytdlp_update()
+            return self._json({"ok": ok, "message": message, "version": version},
+                              200 if ok else 500)
         if path == "/api/waipu/login/start":
             return self._waipu_login_start()
         if path == "/api/waipu/logout":
@@ -141,23 +217,35 @@ class Handler(BaseHTTPRequestHandler):
     # --- API-Implementierung ------------------------------------------------
 
     def _add_download(self, body):
-        url = (body.get("url") or "").strip()
-        if not url:
+        raw = (body.get("url") or "").strip()
+        if not raw:
             return self._json({"error": "Keine URL angegeben."}, 400)
+        dest = valid_dest(body.get("dest", "downloads"))
+        if not dest:
+            return self._json({"error": "Unbekannter Zielordner."}, 400)
         quality = body.get("quality", "best")
-        dest = body.get("dest", "downloads")
         audio_only = bool(body.get("audio_only"))
         playlist = bool(body.get("playlist"))
         subtitles = bool(body.get("subtitles"))
-        # mehrere URLs (zeilenweise) erlauben
-        ids = []
-        for one in [u.strip() for u in url.splitlines() if u.strip()]:
-            ids.append(JOBS.add_url(one, quality, audio_only, dest, playlist, subtitles))
+        archive = bool(body.get("archive"))
+
+        urls = [u.strip() for u in raw.splitlines() if u.strip()]
+        bad = [u for u in urls if not valid_url(u)]
+        if bad:
+            return self._json(
+                {"error": f"Ungueltige URL (nur http/https): {bad[0][:80]}"}, 400)
+        ids = [JOBS.add_url(u, quality, audio_only, dest, playlist, subtitles, archive)
+               for u in urls]
         return self._json({"ids": ids})
 
-    def _ensure_waipu_recordings_cache(self):
-        # einfacher In-Memory-Cache der letzten Liste, fuer den Download per Index
-        return getattr(self.server, "_waipu_recs", None)
+    def _load_waipu_recs(self):
+        """Holt die Aufnahmen und aktualisiert den Cache."""
+        recs = WAIPU.get_recordings()
+        with _WAIPU_LOCK:
+            _WAIPU_RECS.clear()
+            for r in recs:
+                _WAIPU_RECS[str(r.get("id") or r.get("recordingId"))] = r
+        return recs
 
     def _waipu_recordings(self):
         if not WAIPU:
@@ -165,13 +253,9 @@ class Handler(BaseHTTPRequestHandler):
         if not WAIPU.is_logged_in():
             return self._json({"error": "Nicht bei waipu angemeldet.", "logged_in": False}, 401)
         try:
-            recs = WAIPU.get_recordings()
+            recs = self._load_waipu_recs()
         except waipu.WaipuError as e:
             return self._json({"error": str(e)}, 502)
-        # Cache fuer spaeteren Download per id
-        self.server._waipu_recs = {  # type: ignore[attr-defined]
-            str(r.get("id") or r.get("recordingId")): r for r in recs
-        }
         out = []
         for r in recs:
             out.append({
@@ -196,17 +280,28 @@ class Handler(BaseHTTPRequestHandler):
     def _waipu_download(self, body):
         if not WAIPU:
             return self._json({"error": "waipu nicht verfuegbar."}, 400)
-        ids = body.get("ids") or ([body["id"]] if body.get("id") else [])
+        dest = valid_dest(body.get("dest", "Aufnahmen"))
+        if not dest:
+            return self._json({"error": "Unbekannter Zielordner."}, 400)
+        ids = [str(i) for i in (body.get("ids") or ([body["id"]] if body.get("id") else []))]
+        if not ids:
+            return self._json({"error": "Keine Aufnahme ausgewaehlt."}, 400)
         quality = body.get("quality", "best")
-        dest = body.get("dest", "Aufnahmen")
-        cache = getattr(self.server, "_waipu_recs", None) or {}
-        if not cache:
-            return self._json({"error": "Bitte zuerst Aufnahmen laden."}, 400)
-        job_ids = []
-        for rid in ids:
-            rec = cache.get(str(rid))
-            if rec:
-                job_ids.append(JOBS.add_waipu(rec, quality, dest))
+
+        with _WAIPU_LOCK:
+            known = set(_WAIPU_RECS)
+        # Cache leer oder veraltet (z. B. nach Serverneustart)? Neu laden.
+        if not known.issuperset(ids):
+            try:
+                self._load_waipu_recs()
+            except waipu.WaipuError as e:
+                return self._json({"error": str(e)}, 502)
+
+        with _WAIPU_LOCK:
+            recs = [_WAIPU_RECS[i] for i in ids if i in _WAIPU_RECS]
+        if not recs:
+            return self._json({"error": "Aufnahme nicht mehr vorhanden."}, 404)
+        job_ids = [JOBS.add_waipu(rec, quality, dest) for rec in recs]
         return self._json({"ids": job_ids})
 
 
@@ -219,13 +314,20 @@ def main():
             os.makedirs(os.path.join(MEDIA_ROOT, os.path.basename(folder)), exist_ok=True)
         except Exception:
             pass
-    httpd = ThreadingHTTPServer(("0.0.0.0", port), Handler)
-    print(f"VideoDownloader laeuft auf :{port}  (media={MEDIA_ROOT}, data={DATA_DIR})")
-    print(f"waipu verfuegbar: {WAIPU is not None}")
+    httpd = ThreadingHTTPServer((BIND, port), Handler)
+    print(f"VideoDownloader laeuft auf {BIND}:{port}  (media={MEDIA_ROOT}, data={DATA_DIR})", flush=True)
+    print(f"waipu verfuegbar: {WAIPU is not None} | yt-dlp: {downloader.ytdlp_version() or 'NICHT GEFUNDEN'}", flush=True)
+    if AUTH_PASSWORD:
+        print(f"Basic-Auth aktiv (Benutzer: {AUTH_USER})", flush=True)
+    elif BIND not in ("127.0.0.1", "localhost", "::1"):
+        print("WARNUNG: kein AUTH_PASSWORD gesetzt und im Netzwerk erreichbar.", flush=True)
     try:
         httpd.serve_forever()
     except KeyboardInterrupt:
-        pass
+        print("\nBeende laufende Downloads ...")
+        JOBS.cancel_all()
+    finally:
+        httpd.server_close()
 
 
 if __name__ == "__main__":

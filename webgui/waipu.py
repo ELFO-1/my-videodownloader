@@ -16,6 +16,7 @@ import base64
 import json
 import os
 import re
+import threading
 import time
 import uuid
 
@@ -44,11 +45,13 @@ class WaipuError(Exception):
 # ---------------------------------------------------------------------------
 
 class Store:
-    """Schlanker JSON-Store, threadsicher genug fuer unseren Gebrauch."""
+    """Schlanker JSON-Store. Schreibzugriffe sind durch ein Lock serialisiert,
+    da mehrere Worker-Threads gleichzeitig Tokens erneuern koennen."""
 
     def __init__(self, path):
         self.path = path
         self.data = {}
+        self._lock = threading.RLock()
         try:
             with open(path, "r", encoding="utf-8") as f:
                 self.data = json.load(f)
@@ -56,22 +59,28 @@ class Store:
             self.data = {}
 
     def get(self, key, default=None):
-        return self.data.get(key, default)
+        with self._lock:
+            return self.data.get(key, default)
 
     def set(self, key, value):
-        self.data[key] = value
-        self.save()
+        with self._lock:
+            self.data[key] = value
+            self.save()
 
     def update(self, **kwargs):
-        self.data.update(kwargs)
-        self.save()
+        with self._lock:
+            self.data.update(kwargs)
+            self.save()
 
     def save(self):
-        os.makedirs(os.path.dirname(self.path), exist_ok=True)
-        tmp = self.path + ".tmp"
-        with open(tmp, "w", encoding="utf-8") as f:
-            json.dump(self.data, f, indent=2)
-        os.replace(tmp, self.path)
+        with self._lock:
+            directory = os.path.dirname(self.path)
+            if directory:
+                os.makedirs(directory, exist_ok=True)
+            tmp = self.path + ".tmp"
+            with open(tmp, "w", encoding="utf-8") as f:
+                json.dump(self.data, f, indent=2)
+            os.replace(tmp, self.path)
 
 
 # ---------------------------------------------------------------------------
@@ -138,6 +147,9 @@ class WaipuClient:
         self.device_id = store.get("device_id")
         # laufender Device-Login-Zustand (im Speicher)
         self._login = None  # dict: device_code, deadline, interval, state, msg, code, url
+        # waipu rotiert den Refresh-Token: zwei parallele Refreshes wuerden sich
+        # gegenseitig invalidieren -> Erneuerung serialisieren.
+        self._token_lock = threading.Lock()
 
     # --- Tokens -------------------------------------------------------------
 
@@ -174,6 +186,14 @@ class WaipuClient:
         self.store.update(**upd)
 
     def _refresh_access(self):
+        with self._token_lock:
+            # Ein anderer Thread war evtl. schneller.
+            access = self.store.get("access_token", "")
+            if self._jwt_valid(access):
+                return access
+            return self._do_refresh()
+
+    def _do_refresh(self):
         refresh = self.store.get("refresh_token", "")
         if not self._jwt_valid(refresh):
             raise WaipuError("Nicht angemeldet. Bitte ueber den waipu-Login einloggen.")

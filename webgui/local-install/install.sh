@@ -40,6 +40,8 @@ Environment=PATH=/usr/local/bin:/usr/bin:/bin
 Environment=MEDIA_ROOT=%h/Downloads
 Environment=DATA_DIR=%h/.config/videodownloader
 Environment=DEST_FOLDERS=videos,musik
+# nur lokal erreichbar (fuer LAN-Zugriff zusaetzlich AUTH_PASSWORD setzen)
+Environment=BIND=127.0.0.1
 ExecStartPre=/usr/bin/mkdir -p %h/Downloads %h/.config/videodownloader
 ExecStart=/usr/bin/python3 $SERVER $PORT
 Restart=on-failure

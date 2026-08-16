@@ -11,6 +11,12 @@ services:
       - MEDIA_ROOT=/media
       - DATA_DIR=/data
       - DEST_FOLDERS=downloads,filme,serien,musik,Aufnahmen
+      # Anzahl gleichzeitiger Downloads
+      - WORKERS=2
+      # Zugangsschutz: solange AUTH_PASSWORD leer ist, kann JEDER im Netz
+      # Downloads ausloesen. Passwort in .env setzen (AUTH_PASSWORD=...).
+      - AUTH_USER=${AUTH_USER:-admin}
+      - AUTH_PASSWORD=${AUTH_PASSWORD:-}
     volumes:
       # App-Code (per deploy.sh aktualisiert)
       - /DATA/AppData/videodownloader/app:/app

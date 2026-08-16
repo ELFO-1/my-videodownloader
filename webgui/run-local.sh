@@ -18,6 +18,11 @@ export MEDIA_ROOT="${MEDIA_ROOT:-$HOME/Downloads}"
 export DATA_DIR="${DATA_DIR:-$HOME/.config/videodownloader}"
 # Auswahl der Ziel-Ordner im UI
 export DEST_FOLDERS="${DEST_FOLDERS:-videos,musik}"
+# Nur lokal erreichbar. Fuer Zugriff aus dem LAN: BIND=0.0.0.0 *und*
+# AUTH_PASSWORD setzen - sonst kann jeder im Netz Downloads ausloesen.
+export BIND="${BIND:-127.0.0.1}"
+# Gleichzeitige Downloads
+export WORKERS="${WORKERS:-2}"
 
 PORT="${1:-8088}"
 mkdir -p "$MEDIA_ROOT" "$DATA_DIR"
