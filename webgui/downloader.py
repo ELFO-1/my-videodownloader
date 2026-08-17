@@ -119,11 +119,23 @@ def shorten_error(line):
 
 
 def quality_format(quality):
-    """Uebersetzt 'best' / '1080' / '720' ... in einen yt-dlp Format-String."""
+    """Uebersetzt 'best' / '1080' / '720' ... in einen yt-dlp Format-String.
+
+    Erste Wahl ist immer 'bv' (reiner Video-Stream) + 'ba', also getrennte
+    DASH-Streams. Das progressive Kombiformat (bei YouTube Format 18) kommt
+    erst ganz am Ende zum Zug, aus zwei Gruenden:
+
+      * YouTube weist dessen URLs derzeit mit HTTP 403 ab, waehrend dieselben
+        Inhalte als getrennte Streams anstandslos laden.
+      * Es ist ohnehin auf 360p begrenzt. Sobald ein Video nicht hoeher
+        aufloest, gewinnt es die Sortierung nach 'res' gegen den gleich
+        grossen Video-Stream - und zieht die Qualitaet unbemerkt nach unten.
+    """
     q = (quality or "best").strip().lower()
     if q.isdigit():
-        return f"bv*[height<={q}]+ba/b[height<={q}]/b"
-    return "bv*+ba/b"
+        return (f"bv[height<={q}]+ba/bv*[height<={q}]+ba"
+                f"/b[height<={q}]/b")
+    return "bv+ba/bv*+ba/b"
 
 
 def ytdlp_version():
