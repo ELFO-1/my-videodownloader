@@ -17,13 +17,17 @@ RUN curl -fsSL -o /tmp/deno.zip \
 
 # yt-dlp in ein eigenes venv, das dem Laufzeit-User (1000) gehoert. Nur so
 # kann die GUI yt-dlp spaeter selbst aktualisieren, ohne Neubau des Images.
+#
+# Bewusst der Nightly-Kanal (--pre): YouTube aendert seine Auslieferung im
+# Wochentakt, die Gegenfixes landen zuerst im Nightly. Mit dem Stable-Release
+# stehen Downloads regelmaessig wochenlang auf HTTP 403.
 RUN python3 -m venv /opt/venv \
     && /opt/venv/bin/pip install --no-cache-dir --upgrade pip \
-    && /opt/venv/bin/pip install --no-cache-dir yt-dlp requests \
+    && /opt/venv/bin/pip install --no-cache-dir --pre "yt-dlp[default]" requests \
     && chown -R 1000:1000 /opt/venv
 
 ENV PATH="/opt/venv/bin:$PATH" \
-    YTDLP_UPDATE_CMD="/opt/venv/bin/python -m pip install --no-cache-dir --upgrade yt-dlp" \
+    YTDLP_UPDATE_CMD="/opt/venv/bin/python -m pip install --no-cache-dir --upgrade --pre yt-dlp[default]" \
     DENO_DIR=/data/deno
 
 WORKDIR /app
