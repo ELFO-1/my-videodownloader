@@ -250,6 +250,7 @@ class JobManager:
         self.jobs = OrderedDict()      # id -> Job
         self.max_jobs = max_jobs
         self._queue = []               # list of (job, runnable)
+        self._active_outputs = set()   # Zielpfade (ohne Endung) laufender waipu-Jobs
         self._lock = threading.RLock()
         self._cv = threading.Condition(self._lock)
         self._state_path = os.path.join(data_dir, "jobs.json") if data_dir else None
@@ -664,20 +665,37 @@ class JobManager:
         out_dir = self._dest_path(dest)
         job.out_dir = out_dir
         out_template = os.path.join(out_dir, base + ".%(ext)s")
-        # bereits vorhanden?
-        existing = [f for f in os.listdir(out_dir)
-                    if f.startswith(base + ".") and not f.endswith((".part", ".ytdl"))]
-        if existing:
-            job.status = "skipped"
-            job.message = "Datei existiert bereits - uebersprungen."
-            self._set_file(job, os.path.join(out_dir, existing[0]))
-            return
+        out_key = os.path.join(out_dir, base)
+        with self._lock:
+            # Zwei Auftraege mit demselben Zielnamen duerfen nie parallel
+            # laufen: beide yt-dlp-Prozesse schreiben sonst in dieselben
+            # .part-Dateien und das Ergebnis ist kaputt.
+            if out_key in self._active_outputs:
+                job.status = "skipped"
+                job.message = "Gleicher Dateiname laeuft bereits - uebersprungen."
+                return
+            # bereits vorhanden?
+            existing = [f for f in os.listdir(out_dir)
+                        if f.startswith(base + ".") and not f.endswith((".part", ".ytdl"))]
+            if existing:
+                job.status = "skipped"
+                job.message = "Datei existiert bereits - uebersprungen."
+                self._set_file(job, os.path.join(out_dir, existing[0]))
+                return
+            self._active_outputs.add(out_key)
 
         cmd = [YTDLP_BIN] + self._base_args() + [
             "-f", quality_format(quality)] + self._format_args() + [
+            # Fehlende Fragmente nicht stillschweigend ueberspringen - sonst
+            # entsteht eine Datei mit Ton, aber ohne (vollstaendiges) Bild.
+            "--abort-on-unavailable-fragments",
             "--add-header", f"User-Agent: {WAIPU_USER_AGENT}",
             "-o", out_template, "--", stream_url]
-        rc = self._run_proc(job, cmd)
+        try:
+            rc = self._run_proc(job, cmd)
+        finally:
+            with self._lock:
+                self._active_outputs.discard(out_key)
         if job._cancel:
             job.status = "canceled"
             job.message = "Abgebrochen."

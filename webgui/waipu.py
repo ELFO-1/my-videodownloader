@@ -126,7 +126,14 @@ def recording_channel(rec):
 def recording_label(rec):
     title = rec.get("title") or "Ohne Titel"
     episode = rec.get("episodeTitle") or ""
-    return title + (f" - {episode}" if episode else "")
+    if episode:
+        return f"{title} - {episode}"
+    # Mehrteiler (z.B. Zweiteiler) haben oft keinen Episodentitel, nur eine
+    # Folgennummer - ohne sie bekaemen beide Teile denselben Dateinamen.
+    number = str(rec.get("episode") or "").strip()
+    if number:
+        return f"{title} - Teil {number}"
+    return title
 
 
 # ---------------------------------------------------------------------------
