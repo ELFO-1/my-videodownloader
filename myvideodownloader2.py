@@ -13,6 +13,9 @@ import json
 import time
 import base64
 import uuid
+import tempfile
+from collections import deque
+from contextlib import contextmanager
 from pathlib import Path
 from tqdm import tqdm
 
@@ -262,6 +265,35 @@ def rename_video(video_path):
         return video_path
 
 
+@contextmanager
+def _cookie_copy(cookies_file):
+    """Wegwerf-Kopie der cookies.txt fuer genau einen yt-dlp-Lauf.
+
+    yt-dlp schreibt die Cookie-Datei nach jedem Lauf zurueck. Antwortet
+    YouTube dabei mit einem Logout, fehlen danach SID, SAPISID,
+    __Secure-1PSID & Co. in der Datei - ab dann liefert YouTube nur noch
+    Storyboards ("Requested format is not available") oder HTTP 403.
+    yt-dlp bekommt deshalb nur eine Kopie zu sehen; das Original bleibt
+    unangetastet. (Gleicher Ansatz wie in webgui/downloader.py.)
+    """
+    if not cookies_file or not os.path.isfile(cookies_file):
+        if cookies_file:
+            print(f"Hinweis: Cookie-Datei nicht gefunden: {cookies_file}")
+        yield ""
+        return
+    fd, tmp = tempfile.mkstemp(prefix=".cookies-", suffix=".txt")
+    os.close(fd)
+    try:
+        shutil.copyfile(cookies_file, tmp)
+        os.chmod(tmp, 0o600)
+        yield tmp
+    finally:
+        try:
+            os.remove(tmp)
+        except OSError:
+            pass
+
+
 def download_video(url, cookies_file, extra_args=None):
     """Lädt ein Video herunter und zeigt den Fortschritt an"""
     # --newline: Fortschritt zeilenweise (gut parsebar); --no-playlist: nur das
@@ -299,6 +331,9 @@ def download_video(url, cookies_file, extra_args=None):
     merged_path = None
     last_destination = None
     already_path = None
+    # Fuer die Fehlerdiagnose: ERROR-Zeilen und die letzten sonstigen Zeilen
+    error_seen = False
+    recent_lines = deque(maxlen=10)
 
     while True:
         output = process.stdout.readline()
@@ -349,8 +384,21 @@ def download_video(url, cookies_file, extra_args=None):
             merge_match = re.search(r'into "(.+)"', output)
             if merge_match:
                 merged_path = merge_match.group(1).strip()
+        elif output.startswith("ERROR"):
+            # Fehlermeldungen von yt-dlp sofort zeigen, sonst sieht man bei
+            # einem Abbruch nur "Fehler beim Herunterladen" ohne Grund.
+            _close_bar()
+            print(output.strip())
+            error_seen = True
+        else:
+            recent_lines.append(output.rstrip())
 
     _close_bar()
+
+    if process.poll() != 0 and not error_seen and recent_lines:
+        print("Letzte Ausgabe von yt-dlp:")
+        for line in recent_lines:
+            print(f"  {line}")
 
     # Beim Merge ist der gemergte Pfad der finale; sonst die (einzelne)
     # Destination bzw. eine bereits vorhandene Datei.
@@ -933,6 +981,79 @@ def setup_options():
         print("Gespeichert.")
 
 
+def _ytdlp_version(ytdlp_bin):
+    try:
+        out = subprocess.run([ytdlp_bin, "--version"], capture_output=True, text=True, timeout=30)
+        return out.stdout.strip() or "?"
+    except (OSError, subprocess.SubprocessError):
+        return "?"
+
+
+def _owning_pacman_package(path):
+    """Name des pacman-Pakets, dem die Datei gehoert (oder None)."""
+    if not shutil.which("pacman"):
+        return None
+    out = subprocess.run(["pacman", "-Qqo", path], capture_output=True, text=True)
+    if out.returncode != 0:
+        return None
+    return out.stdout.strip() or None
+
+
+def update_ytdlp():
+    """Aktualisiert genau das yt-dlp, das dieses Skript auch aufruft.
+
+    - liegt es im aktiven venv/Python -> pip install -U "yt-dlp[default]"
+      ([default] bringt yt-dlp-ejs mit; ohne das loest yt-dlp YouTubes
+      JS-Challenge nicht und bekommt nur Storyboards)
+    - gehoert es einem pacman-Paket -> Hinweis auf pacman (braucht root)
+    - sonst (Standalone-Binary) -> yt-dlp --update-to
+    """
+    ytdlp_bin = shutil.which("yt-dlp")
+    if not ytdlp_bin:
+        print("yt-dlp wurde nicht gefunden.")
+        return
+
+    print(f"\nVerwendetes yt-dlp: {ytdlp_bin}")
+    print(f"Installierte Version: {_ytdlp_version(ytdlp_bin)}")
+
+    real_bin = os.path.realpath(ytdlp_bin)
+    # Nur in einem venv per pip aktualisieren - nie ins System-Python.
+    in_venv = sys.prefix != sys.base_prefix
+    in_this_python = in_venv and real_bin.startswith(os.path.realpath(sys.prefix) + os.sep)
+    pkg = None if in_this_python else _owning_pacman_package(real_bin)
+
+    if pkg:
+        print(f"\nDieses yt-dlp kommt aus dem Systempaket '{pkg}'.")
+        print(f"Aktualisieren mit:  sudo pacman -Syu {pkg}")
+        print("Tipp: Im venv mit 'pip install \"yt-dlp[default]\"' laeuft das Skript")
+        print("unabhaengig vom Systempaket und kann hier direkt aktualisiert werden.")
+        return
+
+    print("\nWelcher Kanal?")
+    print("  1. Nightly (empfohlen - YouTube-Fixes landen dort zuerst)")
+    print("  2. Stable")
+    channel = input("Auswahl [1]: ").strip() or "1"
+    if channel not in ("1", "2"):
+        print("Ungueltige Auswahl, Abbruch.")
+        return
+    nightly = channel == "1"
+
+    if in_this_python:
+        cmd = [sys.executable, "-m", "pip", "install", "--upgrade"]
+        if nightly:
+            cmd.append("--pre")
+        cmd.append("yt-dlp[default]")
+    else:
+        cmd = [ytdlp_bin, "--update-to", "nightly" if nightly else "stable"]
+
+    print(f"\nAusfuehren: {' '.join(cmd)}")
+    result = subprocess.run(cmd)
+    if result.returncode == 0:
+        print(f"\nyt-dlp ist jetzt auf Version {_ytdlp_version(ytdlp_bin)}.")
+    else:
+        print(f"\nUpdate fehlgeschlagen (Exit-Code {result.returncode}).")
+
+
 def display_banner():
     """Zeigt ein Startbanner an"""
     print("=" * 50)
@@ -958,6 +1079,7 @@ def display_menu(current_cookie_path, current_download_path):
     print("7. waipu.tv Login (Browser/Amazon oder Passwort)")
     print("8. Einstellungen (Qualität/Untertitel/Serien-Ordner)")
     print("9. Beenden")
+    print("10. yt-dlp aktualisieren")
     print("=" * 20)
 
 
@@ -978,7 +1100,7 @@ def main():
 
     while True:
         display_menu(cookies_file, str(download_path))
-        choice = input("Wähle eine Option (1-9): ")
+        choice = input("Wähle eine Option (1-10): ")
 
         if choice == "1":
             url = input("\nVideo-URL eingeben: ")
@@ -988,7 +1110,8 @@ def main():
 
             config, _ = load_config()
             extra = _ytdlp_quality_args(config) + _ytdlp_subtitle_args(config)
-            ok, final_path = download_video(url, cookies_file, extra)
+            with _cookie_copy(cookies_file) as cookie_tmp:
+                ok, final_path = download_video(url, cookie_tmp, extra)
             if ok:
                 print("Video erfolgreich heruntergeladen.")
                 if final_path and os.path.exists(final_path):
@@ -1024,11 +1147,12 @@ def main():
             download_cmd = ["yt-dlp", "-v", "--progress", "--no-warnings"]
             download_cmd += _ytdlp_quality_args(config) + _ytdlp_subtitle_args(config)
             download_cmd.append(playlist_url)
-            if cookies_file:
-                download_cmd.extend(["--cookies", cookies_file])
 
             try:
-                subprocess.run(download_cmd, check=True)
+                with _cookie_copy(cookies_file) as cookie_tmp:
+                    if cookie_tmp:
+                        download_cmd.extend(["--cookies", cookie_tmp])
+                    subprocess.run(download_cmd, check=True)
                 print("Playlist erfolgreich heruntergeladen.")
                 latest_video = None
                 print(
@@ -1096,8 +1220,11 @@ def main():
             print("Programm wird beendet...")
             break
 
+        elif choice == "10":
+            update_ytdlp()
+
         else:
-            print("Ungültige Option. Bitte wähle eine Zahl von 1 bis 9.")
+            print("Ungültige Option. Bitte wähle eine Zahl von 1 bis 10.")
 
 
 if __name__ == "__main__":

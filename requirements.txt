@@ -1,0 +1,25 @@
+# Python-Abhaengigkeiten fuer myvideodownloader2.py (Terminal-Version)
+#
+# Installation im venv:
+#   python -m venv ~/myscripts/env/myvideodownloader
+#   source ~/myscripts/env/myvideodownloader/bin/activate.fish   # bzw. activate
+#   pip install -r requirements.txt
+#
+# yt-dlp NICHT ohne [default] installieren: erst [default] bringt yt-dlp-ejs mit.
+# Ohne das kann yt-dlp YouTubes JS-Challenge nicht loesen, bekommt nur
+# Storyboards und bricht mit "Requested format is not available" ab.
+# [default] zieht ausserdem brotli, certifi, mutagen, pycryptodomex,
+# requests, urllib3 und websockets nach.
+#
+# yt-dlp ist bewusst nicht festgepinnt - YouTube aendert sich laufend.
+# Aktualisieren ueber Menuepunkt 10 im Skript oder:
+#   pip install -U --pre "yt-dlp[default]"    # Nightly
+#
+# Ausserdem noetig (Systempakete, nicht per pip):
+#   ffmpeg  - Video+Audio zusammenfuehren, MP3/WAV-Umwandlung
+#   deno    - JavaScript-Runtime fuer yt-dlp-ejs (YouTube)
+#   z. B. Arch/CachyOS:  sudo pacman -S ffmpeg deno
+
+yt-dlp[default]>=2026.10.26
+tqdm>=4.66
+requests>=2.31

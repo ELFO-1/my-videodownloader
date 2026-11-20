@@ -51,6 +51,20 @@ Cookies für Login-pflichtige Seiten: `cookies.txt` (Netscape-Format) nach
 `myvideodownloader2.py` — interaktives Terminal-Menü (yt-dlp + waipu), Vorlage
 für die Web-GUI. Ältere Entwicklungsstände liegen in `legacy/`.
 
+Installation im venv (dazu als Systempakete `ffmpeg` und `deno`):
+
+```sh
+python -m venv ~/myscripts/env/myvideodownloader
+source ~/myscripts/env/myvideodownloader/bin/activate.fish   # bzw. activate
+pip install -r requirements.txt
+```
+
+yt-dlp lässt sich über Menüpunkt **10** aktualisieren (Nightly oder Stable).
+Wichtig ist `yt-dlp[default]` statt nur `yt-dlp`: erst damit kommt
+`yt-dlp-ejs` mit, ohne das YouTube nur „Requested format is not available“
+liefert. Die `cookies.txt` reicht das Skript nur als Wegwerf-Kopie an yt-dlp
+weiter, damit yt-dlp die Login-Cookies nicht überschreibt.
+
 ---
 
 > Hinweis: Es wird **kein Kopierschutz umgangen**. Die waipu-Funktion lädt nur
